@@ -1,0 +1,305 @@
+---
+title: "Text cleaning"
+date: "2023-09-06"
+output: 
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 3
+    number_sections: true
+    theme: lumen
+---
+
+# Background
+
+Sammy provided us with a couple of excel and text files documenting the types of drugs administered per-patient. We want to summarize the data. 
+
+# Objectives
+
+1. Summarize all the listed drugs
+2. Heatmap of pre-categorized drug
+
+
+# Pre-processing 
+
+## Loading packages
+
+```{r, message=FALSE, warning=FALSE}
+library(here)
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(reshape2)
+library(stringr)
+
+library(ComplexHeatmap)
+```
+
+
+## Directories
+
+```{r}
+wd <- list()
+wd$main <- here()
+wd$data <- file.path(wd$main, "data")
+wd$dataP <- file.path(wd$data, "processed")
+wd$output <- file.path(wd$main, "output")
+wd$script <- file.path(wd$main, "scripts")
+```
+
+
+Create directories
+
+```{r}
+if (!file.exists(wd$output )) {
+  dir.create(wd$output )
+} else {
+  print("Directory already exists")
+}
+```
+
+Load functionm
+
+```{r}
+source(file.path(wd$script, "functions.R"))
+```
+
+
+# Objective 1
+
+**Summarize all the listed drugs**
+
+Read in the data
+
+```{r}
+dat <- read.delim(file.path(wd$data, "from_Sammy/meds-baseline.tsv"))
+head(dat)
+```
+
+Each row represents a patient, with the 'record_id' column represeting the patient ID. We extract the 'current_meds_other' column. This is the column detailing what other medication was given. Since multiple drug is given in a column, we separate this.
+
+Sometimes the drug is seperated by a ',' comma or a semi-colon ';'
+
+
+```{r}
+list_split <- str_split(dat$current_meds_other, ",|;")
+names(list_split) <- dat$record_id
+
+
+un_split <- unlist(list_split, use.names=TRUE)
+
+df_split <- stack(list_split) %>%
+  # Rename
+  dplyr::rename(current_med = values,
+                record_id = ind) 
+
+# Remove any empty spaces at the start
+df_split <- df_split %>%
+  mutate(current_med = gsub("^ ", "", current_med),
+         current_med = as.character(mapply(simpleCap, current_med))) %>%
+  # Remove blanks
+  filter(!current_med == "") %>%
+  # Further modification
+  mutate(
+    # If the start is "-", remove the symbol
+    current_med = gsub("^-", "", current_med),
+    # Remove leading and trailing
+    current_med = trimws(current_med, which="both", whitespace = "[ \t\r\n]"),
+    current_med = trim(current_med)
+    )
+
+# # Remove some special symbol
+# df_split2 <- df_split %>%
+#   mutate(current_med = gsub("¬†", " ", current_med))
+# #write.csv(df_split2, "~/Desktop/tmp.csv")
+
+```
+
+
+
+Quick look at the harmonized category, we see some variation to the names, something like this. 
+
+```{r}
+filter(df_split, str_detect(current_med, "Hydrochlorothiazide")) %>% select(current_med) %>% unique()
+filter(df_split, str_detect(current_med, "hydrochlorothiazide")) %>% select(current_med) %>% unique()
+```
+
+Lets further harmonize the name
+
+```{r}
+df_split2 <- df_split %>%
+  mutate(
+    current_med = 
+      case_when(
+        str_detect(current_med, "(?i)hydrochlorothiazide") ~ "Hydrochlorothiazide",
+        str_detect(current_med, "(?i)Clonazepam") ~ "Clonazepam",
+        str_detect(current_med, "(?i)cymbalta") ~ "Cymbalta",
+        str_detect(current_med, "(?i)diphenhydramine") ~ "Diphenhydramine",
+        str_detect(current_med, "(?i)gabapentin") ~ "Gabapentin",
+        str_detect(current_med, "(?i)hydrocodone") ~ "Hydrocodone",
+        str_detect(current_med, "(?i)imodium") ~ "Imodium",
+        str_detect(current_med, "(?i)levofloxacin") ~ "Levofloxacin",
+        str_detect(current_med, "(?i)ondansetron") ~ "Ondansetron",
+        str_detect(current_med, "(?i)prochlorperazine") ~ "Prochlorperazine",
+        str_detect(current_med, "(?i)soma") ~ "Soma",
+        str_detect(current_med, "(?i)acetaminophen") ~ "Acetaminophen",    # SAME as oxydone?
+        str_detect(current_med, "(?i)docusatesodium") ~ "Docusatesodium",
+        str_detect(current_med, "(?i)methimazole") ~ "Methimazole",
+        str_detect(current_med, "(?i)nicotine") ~ "Nicotine",
+        str_detect(current_med, "(?i)oxycodone") ~ "Oxycodone",      # SAME as acetaminophen?
+        str_detect(current_med, "(?i)prochlorperazine") ~ "Prochlorperazine",
+        str_detect(current_med, "(?i)Coq10") ~ "Coq10",
+        str_detect(current_med, "(?i)Aldactazide") ~ "Aldactazide",
+        str_detect(current_med, "(?i)Buspirone") ~ "Buspirone",
+        str_detect(current_med, "(?i)Cefdinir") ~ "Cefdinir",
+        str_detect(current_med, "(?i)Potassium") ~ "Potassium",
+        str_detect(current_med, "(?i)levothyroxine") ~ "Levothyroxine",
+        str_detect(current_med, "(?i)nystatin") ~ "Nystatin",
+        str_detect(current_med, "(?i)clearlax") ~ "Clearlax",
+        str_detect(current_med, "(?i)Polyethylene") ~ "Polyethylene Glycol",
+        #str_detect(current_med, "(?i)Albuterol") ~ "Albuterol",
+        #str_detect(current_med, "(?i)Allopurinol") ~ "Allopurinol",
+        
+        
+        
+
+        
+        
+        
+        
+        
+        
+        TRUE ~ current_med),
+    current_med = gsub("[0-9.-]+mg.*", "", current_med),
+    # Remove "Mg" in capital letters with or without a space before a decimal number
+    current_med = gsub("([A-Z] )?\\d+(\\.\\d+)? Mg.*", "", current_med)
+      )
+
+#str_detect(current_med, "(?i)") ~ "",
+```
+
+Things to check
+
+Drug combination, what to do
+  - Oxycodone-acetaminophen (is it the same drug)
+  - Hydrocodone-acetaminophen
+
+
+Lets get a tally of the unique number of observation for the drugs
+
+
+```{r}
+df_count <- df_split2 %>% count(current_med)
+
+# Remove some special symbol
+df_count <- df_count %>%
+  mutate(current_med = gsub("\\¬†", "", current_med)) %>%
+  filter(!current_med == "")
+
+write.csv(df_count, file.path(wd$output, "Observation_counts.csv"))
+```
+
+
+We used chat GPT-3 to find the category of these drugs. The linked search query is [here](https://chat.openai.com/share/392e3a0d-bc7d-44b6-be85-56fb54f4f539). In total we get 68 categories. Read the result and merge with the count
+
+
+```{r}
+df_gpt <- read_xlsx(file.path(wd$data, "Drug_categorized.xlsx"))
+
+# Merge with the count
+
+df_count <- df_count %>% left_join(df_gpt, by = c("current_med" = "Original_Input"))
+
+write.csv(df_count, file.path(wd$output, "Observation_counts.csv"))
+```
+
+
+# Objective 2
+
+**Heatmap of pre-categorized drug**
+
+There is a column in the file 'curated.meds'. This is a manual curation by Araballa's team. We simply make a patient x medicine matrix to draw a heatmap. 
+
+```{r}
+list_split <- str_split(dat$curated.meds, ",|;")
+names(list_split) <- dat$record_id
+
+
+un_split <- unlist(list_split, use.names=TRUE)
+
+df_split_main <- stack(list_split) %>%
+  # Rename
+  dplyr::rename(curated_med = values,
+                record_id = ind) 
+
+# Remove NA
+df_split_main <- df_split_main %>%
+  filter(!curated_med == "NA") 
+```
+
+
+
+Convert to wide format
+
+```{r}
+df_split_main$val <- 1
+df_wide <- df_split_main %>% pivot_wider(names_from = curated_med, values_from = val, values_fill = 0) %>%
+  mutate(record_id = paste0("p_", record_id))
+
+mat <- as.data.frame(df_wide)
+row.names(mat) <- mat$record_id
+mat <- mat[,-1]
+mat <- as.matrix(mat)
+t_mat <- t(mat)
+```
+
+
+Draw a simple Heatmap.
+
+
+```{r}
+mypalette <- c("white", "black")
+
+
+
+
+ph <- 
+  Heatmap(t_mat, col=mypalette,
+          column_title = "Clustering of patients (columns) based on if a class of drug is given. Each row is a patient",
+          show_column_names=FALSE,
+          heatmap_legend_param = list(
+            color_bar = "discrete"))
+
+pdf(file.path(wd$output, "Heatmap_Curated_cat.pdf"), width = 10, height = 4)
+ph
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
