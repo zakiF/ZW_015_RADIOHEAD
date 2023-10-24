@@ -24,8 +24,8 @@ Her student [Samantha Stone](https://www.linkedin.com/in/samantha-stone-010ba211
 
 ## Timeline
 
-- [ ] Send Sammy the list of harmonized drug names  📅 2023-09-06 
-- [ ] Heat-map of the co-occurence of the summarized gens 📅 2023-09-06 
+- [x] Send Sammy the list of harmonized drug names 📅 2023-09-06 ✅ 2023-09-24
+- [x] Heat-map of the co-occurence of the summarized gens 📅 2023-09-06 ✅ 2023-09-24
 
 
 ## Readings

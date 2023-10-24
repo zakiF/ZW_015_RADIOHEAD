@@ -32,6 +32,7 @@ library(readxl)
 library(ggplot2)
 library(reshape2)
 library(stringr)
+library(ggvenn)
 
 library(ComplexHeatmap)
 ```
@@ -104,7 +105,7 @@ df_split <- df_split %>%
   mutate(
     # If the start is "-", remove the symbol
     current_med = gsub("^-", "", current_med),
-    # Remove leading and trailing
+    # Remove leading and trailing whitespace (Does not seem to work as we still have white space)
     current_med = trimws(current_med, which="both", whitespace = "[ \t\r\n]"),
     current_med = trim(current_med)
     )
@@ -124,6 +125,267 @@ Quick look at the harmonized category, we see some variation to the names, somet
 filter(df_split, str_detect(current_med, "Hydrochlorothiazide")) %>% select(current_med) %>% unique()
 filter(df_split, str_detect(current_med, "hydrochlorothiazide")) %>% select(current_med) %>% unique()
 ```
+
+We noted some drugs were separated with a "-" or "/". These indicate muliple drugs was administered. However, not all cases are like this, some "-" is just the name of the drug. So lets have a look at all columns with "-".
+
+```{r}
+# Data with "-"
+df_split_p1 <- df_split %>% filter(str_detect(current_med, "-"))
+tmp <- df_split_p1 %>% pull(current_med) %>% unique()
+#write.csv(tmp, "~/Desktop/Data_with_dash.csv")
+
+# Data with "/"
+df_split_p2 <- df_split %>% filter(str_detect(current_med, "\\/"))
+tmp2 <- df_split_p2 %>% pull(current_med) %>% unique()
+#write.csv(tmp2, "~/Desktop/Data_with_slash.csv")
+
+# Data with " "
+df_split_p3 <- df_split %>% filter(str_detect(current_med, " "))
+tmp3 <- df_split_p3 %>% pull(current_med) %>% unique()
+#write.csv(tmp3, "~/Desktop/Data_with_space.csv")
+```
+
+We gave this data to Sammy, who then identified which of the drugs are actually multiple drugs. We read the output from Sammy's assessment. It will contain a column to indicate which of these drugs are multiple. 
+
+```{r}
+df_dash_ss <-read.csv(file.path(wd$dataP, "Data_with_dash _ss.csv")) %>% 
+  select(current_med, multiple_drugs)
+  
+df_slash_ss <-read.csv(file.path(wd$dataP, "Data_with_slash_ss.csv")) %>%
+  select(current_med, multiple_drugs)
+
+df_space_ss <-read.csv(file.path(wd$dataP, "Data_with_space_ss.csv")) %>%
+  select(current_med, multiple_drugs)
+```
+
+
+For those that are multiple drugs, we again do the splitting by dash or slash. Lets add back patient names
+
+```{r}
+df_dash_ss <- left_join(df_split_p1, df_dash_ss)
+df_slash_ss <- left_join(df_split_p2, df_slash_ss)
+df_space_ss <- left_join(df_split_p3, df_space_ss)
+# Find mulitple drugs, and split them
+d1 <- df_dash_ss %>% filter(!multiple_drugs == "")
+d2 <- df_slash_ss %>% filter(!multiple_drugs == "")
+d3 <- df_slash_ss %>% filter(!multiple_drugs == "")
+
+d_multip <- rbind(d1, d2, d3)
+
+list_split <- str_split(d_multip$multiple_drugs, "-|\\/| ")
+names(list_split) <- d_multip$record_id
+
+df_split2 <- stack(list_split) %>%
+  # Rename
+  dplyr::rename(current_med = values,
+                record_id = ind) 
+
+
+# Lets merge into one big file
+# 1) Remove the muliple drugs 
+df_no_mult <- df_split %>% filter(!current_med %in% d_multip$current_med)
+# 2) Join back with the multiple drugs
+df_split_all <- rbind(df_split2, df_no_mult)
+# 3) Add back the original medication column (in the unprocessed file)
+df_split_all <- left_join(df_split_all, dat) %>% arrange(record_id)
+
+#write.csv(df_split_all, "~/Desktop/current_processed_not_harmonized.csv")
+#write.csv(dat, "~/Desktop/original_file_from_ss.csv")
+```
+
+
+
+## Harmonization
+
+Lets do some harmonization 
+
+```{r}
+df_split_all2 <- df_split_all %>%
+  mutate(
+    # Remove Drug concentration, remove mg
+    current_med = gsub("[0-9.-]+mg.*", "", current_med),
+    # Remove "Mg" in capital letters with or without a space before a decimal number
+    current_med = gsub("([A-Z] )?\\d+(\\.\\d+)? Mg.*", "", current_med),
+    # For any drug with open brackets "(", we remove anything after that
+    current_med = gsub("\\(.*", "", current_med)
+    
+    )
+
+
+```
+
+Lets get a tally of the unique number of observation for the drugs
+
+
+```{r}
+df_count <- df_split_all2 %>% count(current_med)
+
+# Remove some special symbol
+df_count <- df_count %>%
+  mutate(current_med = gsub("\\¬†", "", current_med)) %>%
+  filter(!current_med == "")
+
+write.csv(df_count, file.path(wd$output, "Observation_counts_tmpp.csv"))
+```
+
+We then input this to chat GPT, 100 lines at a time. Our query is 
+
+> These are list of drugs
+>
+> Generate 4 column output where ; 
+> 1st column is the current input
+> 2nd column is the corrected name, for any spelling errors
+> 3rd column is the generic / brand name
+> 4th column is the drug category
+
+
+We read the saved output from ChatGP3
+
+```{r}
+gpt_output <- read_xlsx(file.path(wd$dataP, "Chat_GPT3_output.xlsx")) %>%
+  select(Current_Input:Drug_Category) %>% distinct() 
+```
+
+Now we merge the chat GPT3 output with the orignal data
+
+```{r}
+df_split_all3 <- df_split_all2 %>%
+  mutate(
+    current_med = trimws(current_med, which="both", whitespace = "[ \t\r\n]")) %>%
+  left_join(gpt_output, by=c("current_med" = "Current_Input"))
+```
+
+Check if the number of rows are the same
+
+```{r}
+dim(df_split_all2)
+dim(df_split_all3)
+```
+
+
+Get the count after harmonization 
+
+```{r}
+df_count2 <- df_split_all3 %>% count(harmonize_name)
+
+write.csv(df_count2, file.path(wd$output, "Observation_counts_harmonized.csv"))
+```
+
+
+Get the count for each drug category and generic name
+
+```{r}
+drug_cat <-  df_split_all3 %>% count(Drug_Category, Generic_Brand_Name)
+
+write.csv(drug_cat, file.path(wd$output, "Observation_counts_DrugCat_and_Generic_or_BrandName.csv"))
+
+
+drug_cat <-  df_split_all3 %>% count(harmonize_name, Generic_Brand_Name)
+
+write.csv(drug_cat, file.path(wd$output, "Observation_counts_harmonize_name_and_Generic_or_BrandName.csv"))
+
+
+drug_cat <-  df_split_all3 %>% count(current_med, harmonize_name, Generic_Brand_Name)
+
+write.csv(drug_cat, file.path(wd$output, "Observation_counts_current_med_and_harmonize_name_and_Generic_or_BrandName.csv"))
+```
+
+
+Save with the patient data as well
+
+```{r}
+write.csv(df_split_all3, file.path(wd$output, "Per_patient_harmonized.csv"))
+writexl::write_xlsx(df_split_all3, file.path(wd$output, "Per_patient_harmonized.xlsx"))
+```
+
+
+## Sammy input
+
+Sammy helped us harmonizing the data. We read her file. 
+
+```{r}
+sam_in <- read_xlsx(file.path(wd$dataP, "round2/harmonized_drug_list_ss.xlsx"))
+```
+Because excel output something a bit different then R, in terms of the text. We read our saved excel file into R
+
+```{r}
+zak_in <- read_xlsx(file.path(wd$output, "Per_patient_harmonized.xlsx"))
+```
+
+As we will join according to 'curated_med' column, we check the overlap between Zaki and Sammy files.
+
+```{r}
+list_venn <- list(Sammy = sort(sam_in$current_med),
+                  Zaki = sort(unique(df_split_all3$current_med)))
+
+ggvenn(list_venn, c("Sammy", "Zaki"))     
+
+#> We manually checked overlap using excel and found 2,303 (of 2,344, 98%) were overlapping. 
+```
+
+Based on the Venn, we see 96.5% overlap. So lets work on the overlap first
+
+We filter to only those overlapping. 
+
+```{r}
+# only in sammy
+only_sam <- sam_in %>% filter(!current_med %in% df_split_all3$current_med)
+
+# only in Zaki
+only_zak <- df_split_all3 %>% filter(!current_med %in% sam_in$current_med) %>% arrange(current_med)
+
+# The overlapping 
+ov <- df_split_all3 %>% filter(current_med %in% sam_in$current_med) %>% 
+  left_join(sam_in)
+```
+
+Now we want to harmonize it based on the column provided by Sammy. Because its just 5 columns, lets manually do column-by-column.
+
+
+```{r}
+# Make one column of harmonized name
+t1 <- ov %>% mutate(harmonized_final = harmonized_generic_1) %>%
+  filter(!is.na(harmonized_final)) %>%
+  filter(!harmonized_final == "NA")
+
+t2 <- ov %>% mutate(harmonized_final = harmonized_generic_2) %>%
+  filter(!is.na(harmonized_final)) %>%
+  filter(!harmonized_final == "NA")
+
+t3 <- ov %>% mutate(harmonized_final = harmonized_generic_3) %>%
+  filter(!is.na(harmonized_final)) %>%
+  filter(!harmonized_final == "NA")
+
+t4 <- ov %>% mutate(harmonized_final = harmonized_generic_4) %>%
+  filter(!is.na(harmonized_final)) %>%
+  filter(!harmonized_final == "NA")
+
+t5 <- ov %>% mutate(harmonized_final = harmonized_generic_5) %>%
+  filter(!is.na(harmonized_final)) %>%
+  filter(!harmonized_final == "NA")
+
+
+t_all <- rbind(t1, t2, t3, t4, t5) %>% arrange(record_id) %>%
+  mutate(harmonized_final = as.character(mapply(simpleCap, harmonized_final)))
+
+writexl::write_xlsx(t_all, file.path(wd$output, "Per_patient_harmonized_round2.xlsx"))
+
+drug_cat <-  t_all %>% count(current_med, harmonized_final) %>% arrange(desc(n))
+writexl::write_xlsx(drug_cat, file.path(wd$output, "Tally_current_med_and_harmonized_round2.xlsx"))
+
+
+drug_cat2 <-  t_all %>% count(harmonized_final) %>% arrange(desc(n))
+writexl::write_xlsx(drug_cat2, file.path(wd$output, "Tally_harmonized_round2.xlsx"))
+
+```
+
+
+
+
+
+
+
+# Not done
 
 Lets further harmonize the name
 
@@ -158,17 +420,80 @@ df_split2 <- df_split %>%
         str_detect(current_med, "(?i)nystatin") ~ "Nystatin",
         str_detect(current_med, "(?i)clearlax") ~ "Clearlax",
         str_detect(current_med, "(?i)Polyethylene") ~ "Polyethylene Glycol",
+        str_detect(current_med, "(?i)Adavir") ~ "Adavir",
+        str_detect(current_med, "(?i)Albuterol") ~ "Albuterol",
+        str_detect(current_med, "(?i)Hydrochlorothiazide") ~ "Hydrochlorothiazide",
+        str_detect(current_med, "(?i)Alfuzosin") ~ "Alfuzosin",
+        str_detect(current_med, "(?i)Alfuzusin") ~ "Alfuzosin",
+        str_detect(current_med, "(?i)Aleve") ~ "Naproxen",
+        str_detect(current_med, "(?i)Alieve") ~ "Naproxen",
+        str_detect(current_med, "(?i)Allegra") ~ "Fexofenadine",
+        str_detect(current_med, "(?i)Fexofenadine") ~ "Fexofenadine",
+        str_detect(current_med, "(?i)Aller-tec") ~ "Cetirizine",
+        str_detect(current_med, "(?i)Cetrizine") ~ "Cetirizine",
+        str_detect(current_med, "(?i)Allopurinol") ~ "Alloporinol",
+        str_detect(current_med, "(?i)Alopurinol") ~ "Alloporinol",
+        str_detect(current_med, "(?i)Alogliptin") ~ "Alogliptin",
+        str_detect(current_med, "(?i)Aloogliptin") ~ "Alogliptin",
+        str_detect(current_med, "(?i)Aloxi") ~ "Palonosetron",
+        str_detect(current_med, "(?i)Palonosetron") ~ "Palonosetron",
+        str_detect(current_med, "(?i)Alphagan") ~ "Brimonidine",
+        str_detect(current_med, "(?i)Brimonidine") ~ "Brimonidine",
+        str_detect(current_med, "(?i)Alphalipoiu Acid") ~ "Alpha_Lipoic_Acid",
+        str_detect(current_med, "(?i)Alpraz") ~ "Alprazolam",
+        str_detect(current_med, "(?i)Altace") ~ "Ramipril",
+        str_detect(current_med, "(?i)Ramipril") ~ "Ramipril",
+        str_detect(current_med, "(?i)Amaryl") ~ "Glimepiride",
+        str_detect(current_med, "(?i)Glimepiride") ~ "Glimepiride",
+        str_detect(current_med, "(?i)Ambien") ~ "Zolpidem",
+        str_detect(current_med, "(?i)Amelopdipine") ~ "Amlodipine",
+        str_detect(current_med, "(?i)Amiodipine") ~ "Amlodipine",
+        str_detect(current_med, "(?i)Amilodipine") ~ "Amlodipine",
+        str_detect(current_med, "(?i)Amlcolipine") ~ "Amlodipine",
+        str_detect(current_med, "(?i)Amlo") ~ "Amlodipine",
+        str_detect(current_med, "(?i)Amplodipine") ~ "Amlodipine",
+        str_detect(current_med, "(?i)Amidarone") ~ "Amiodarone",
+        str_detect(current_med, "(?i)Amidavone") ~ "Amiodarone",
+        str_detect(current_med, "(?i)Amoro Ellipta") ~ "Umeclidinium",
+        str_detect(current_med, "(?i)Anaro Ellipta") ~ "Umeclidinium",
+        str_detect(current_med, "(?i)Anoro") ~ "Umeclidinium",
+        str_detect(current_med, "(?i)Anusol") ~ "Hydrocortisone",
+        str_detect(current_med, "(?i)Hydrocortisone") ~ "Hydrocortisone",
+        str_detect(current_med, "(?i)Apixiban") ~ "Apixaban",
+        str_detect(current_med, "(?i)Apriso") ~ "Mesalamine",
+        str_detect(current_med, "(?i)Aptiom") ~ "Eslicarbazepine",
+        str_detect(current_med, "(?i)Aranesp") ~ "Darbepoetin",
+        str_detect(current_med, "(?i)Darbepoetin") ~ "Darbepoetin",
+        str_detect(current_med, "(?i)Areds") ~ "Areds",
+        str_detect(current_med, "(?i)Arfarin") ~ "Warfarin",
+        str_detect(current_med, "(?i)Aricept") ~ "Donepezil",
+        str_detect(current_med, "(?i)Arimidex") ~ "Anastrozole",
+        str_detect(current_med, "(?i)Arixtra") ~ "Fondaparinux",
+        
+        str_detect(current_med, "(?i)Aromasin") ~ "Exemestane",
+        str_detect(current_med, "(?i)Artorvastatin") ~ "Atorvastatin",
+        # ##### str_detect(current_med, "(?i)Asa") ~ "Acetylsalicylic acid,",
+        str_detect(current_med, "(?i)Ascorbic Acid") ~ "Ascorbic Acid",
+        str_detect(current_med, "(?i)Aspir") ~ "Acetylsalicylic Acid",
+        str_detect(current_med, "(?i)Aspririn") ~ "Acetylsalicylic Acid",
+        str_detect(current_med, "(?i)Atacand") ~ "Candesartan",
+        str_detect(current_med, "(?i)Atenolol") ~ "Atenolol",
+        str_detect(current_med, "(?i)Atiran") ~ "Ativan",
+        str_detect(current_med, "(?i)Ativan") ~ "Lorazepam",
+        str_detect(current_med, "(?i)Ator") ~ "Atorvastatin",
+        str_detect(current_med, "(?i)Atonvastatin") ~ "Atorvastatin",
+        str_detect(current_med, "(?i)Ativastatin") ~ "Atorvastatin",
+        str_detect(current_med, "(?i)Atrova") ~ "Atorvastatin",
+        str_detect(current_med, "(?i)Atovastatin") ~ "Atorvastatin",
+        str_detect(current_med, "(?i)Atrovent") ~ "Ipratropium",
+        # str_detect(current_med, "(?i)") ~ "",
+        # str_detect(current_med, "(?i)") ~ "",
+        # str_detect(current_med, "(?i)") ~ "",
+        # 
+        # str_detect(current_med, "(?i)") ~ "",
+        
         #str_detect(current_med, "(?i)Albuterol") ~ "Albuterol",
         #str_detect(current_med, "(?i)Allopurinol") ~ "Allopurinol",
-        
-        
-        
-
-        
-        
-        
-        
-        
         
         TRUE ~ current_med),
     current_med = gsub("[0-9.-]+mg.*", "", current_med),
@@ -179,11 +504,20 @@ df_split2 <- df_split %>%
 #str_detect(current_med, "(?i)") ~ "",
 ```
 
+
+For Aldactazide we want to seperate it to ;
+  - Spironolactone 
+  - Hydrochlorothiazide
+
+Anaro Ellipta
+ - Umeclidinium
+ - Vilanterol
+
 Things to check
 
-Drug combination, what to do
-  - Oxycodone-acetaminophen (is it the same drug)
-  - Hydrocodone-acetaminophen
+Drug combination, what to do  
+  - Oxycodone-acetaminophen (is it the same drug)  
+  - Hydrocodone-acetaminophen 
 
 
 Lets get a tally of the unique number of observation for the drugs
