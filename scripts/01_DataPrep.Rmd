@@ -330,9 +330,11 @@ We filter to only those overlapping.
 ```{r}
 # only in sammy
 only_sam <- sam_in %>% filter(!current_med %in% df_split_all3$current_med)
+writexl::write_xlsx(only_sam, file.path(wd$output, "Only_Sammy_round2.xlsx"))
 
 # only in Zaki
 only_zak <- df_split_all3 %>% filter(!current_med %in% sam_in$current_med) %>% arrange(current_med)
+writexl::write_xlsx(only_zak, file.path(wd$output, "Only_Zaki_round2.xlsx"))
 
 # The overlapping 
 ov <- df_split_all3 %>% filter(current_med %in% sam_in$current_med) %>% 
@@ -379,6 +381,71 @@ writexl::write_xlsx(drug_cat2, file.path(wd$output, "Tally_harmonized_round2.xls
 
 ```
 
+
+One thing Sammy note is that, in the original 'curated.meds' columns (`dat` object). We also want to include this medications. We repeat some analysis and add these drugs. 
+
+```{r}
+list_split <- str_split(dat$curated.meds, ",|;")
+names(list_split) <- dat$record_id
+
+
+un_split <- unlist(list_split, use.names=TRUE)
+
+df_split <- stack(list_split) %>%
+  # Rename
+  dplyr::rename(current_med = values,
+                record_id = ind) 
+
+# Remove any empty spaces at the start
+df_split <- df_split %>%
+  mutate(current_med = gsub("^ ", "", current_med),
+         current_med = as.character(mapply(simpleCap, current_med))) %>%
+  # Remove blanks
+  filter(!current_med == "") %>%
+  # Further modification
+  mutate(
+    # If the start is "-", remove the symbol
+    current_med = gsub("^-", "", current_med),
+    # Remove leading and trailing whitespace (Does not seem to work as we still have white space)
+    current_med = trimws(current_med, which="both", whitespace = "[ \t\r\n]"),
+    current_med = trim(current_med)
+    )
+```
+
+
+We add these data together
+
+```{r}
+t_all_sub <- t_all %>% select(record_id, current_meds_other) %>% distinct()
+
+df_split <- df_split %>% left_join(t_all_sub) %>%
+  mutate(harmonized_final = current_med) %>%
+  select(record_id, current_meds_other, current_med, harmonized_final)
+
+# Join with the overlap
+t_all_sub <- t_all %>% select(record_id, current_meds_other, current_med, harmonized_final) %>% distinct()
+
+ov_final <- rbind(df_split, t_all_sub) %>% arrange((record_id)) %>%
+  dplyr::rename(
+    original_input = current_meds_other,
+    old_harmonized = current_med
+  ) %>%
+  filter(!old_harmonized == "NANA")
+
+writexl::write_xlsx(ov_final, file.path(wd$output, "Per_patient_harmonized_round2.xlsx"))
+```
+
+
+Re-do the counting
+
+```{r}
+drug_cat <-  ov_final %>% count(old_harmonized, harmonized_final) %>% arrange(desc(n))
+writexl::write_xlsx(drug_cat, file.path(wd$output, "Tally_current_med_and_harmonized_round2.xlsx"))
+
+
+drug_cat2 <-  ov_final %>% count(harmonized_final) %>% arrange(desc(n))
+writexl::write_xlsx(drug_cat2, file.path(wd$output, "Tally_harmonized_round2.xlsx"))
+```
 
 
 
